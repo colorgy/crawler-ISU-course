@@ -24,7 +24,6 @@ class CrawlWorker < WebTaskRunner::TaskWorker
         RestClient.put("#{ENV['DATA_MANAGEMENT_API_ENDPOINT']}/#{course[:code]}?key=#{ENV['DATA_MANAGEMENT_API_KEY']}",
           { ENV['DATA_NAME'] => course }
         )
-        print "after_each done :D"
         # WebTaskRunner.job_1_progress = payload[:progress]
       end
     )
