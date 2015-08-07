@@ -85,6 +85,14 @@ class IShouUniversityCrawler
             data[k] = doc.css('table')[1].css('tr')[j].css('td')[k].content
           end
 
+          if doc.css('table')[1].css('tr')[j].css('td a[target="_blank"]')[0] != nil
+            syllabus_url = "http://netreg.isu.edu.tw/wapp/wapp_sha/#{doc.css('table')[1].css('tr')[j].css('td a[target="_blank"]').map{|a| a[:href]}[0]}"
+          #   temp = Nokogiri::HTML(@ic.iconv(RestClient.get(syllabus_url))).css('table:nth-child(2) td')[-5]
+          #   lecturer = temp.text if temp != nil
+          #   temp = nil
+            # 跑lecturer會很久要經過3000個網頁阿！！！ 22 minutes...
+          end
+
           code = "#{@year}-#{@term}-#{data[1].strip}"
 
           course_days = []
@@ -110,6 +118,8 @@ class IShouUniversityCrawler
             required: data[5].include?('必'),    # 修別(必選修)
             people_limit: data[6],    # 限制選修人數
             people: data[7].to_i,    # 修課人數
+            url: syllabus_url,    # 課程大綱之類的連結
+            # lecturer: lecturer,    # 授課教師
             day_1: course_days[0],
             day_2: course_days[1],
             day_3: course_days[2],
