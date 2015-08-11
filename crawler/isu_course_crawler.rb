@@ -6,7 +6,7 @@ require 'pry'
 require 'thread'
 require 'thwait'
 
-class IShouUniversityCrawler
+class IsuCourseCrawler
 
   PERIODS = {
     "1" => 1,
@@ -24,7 +24,6 @@ class IShouUniversityCrawler
     "D" => 13,
   }
 
-
   def initialize year: nil, term: nil, update_progress: nil, after_each: nil
 
     @year = year
@@ -37,10 +36,10 @@ class IShouUniversityCrawler
   end
 
   def courses
-    @courses = []
+    @courses = {}
 
     doc = Nokogiri::HTML(@ic.iconv(@query_url))
-    majr_option = doc.css('table')[1].css('tr')[2].css('option')
+    majr_option = doc.css('select[name="majr_no"] option')
 
     # 年級 (1~15)
     grade_beg = 1
@@ -56,17 +55,18 @@ class IShouUniversityCrawler
     divi_F="T"
 
     threads = []
+    lecturer_threads = []
 
     (0..majr_option.count - 2).each do |i|
       sleep(1) until (
         threads.delete_if { |t| !t.status };  # remove dead (ended) threads
         threads.count < (ENV['MAX_THREADS'] || 20)
       )
+
       threads << Thread.new do
-        data = []
         # 系所
         majr_no = majr_option[i].text[0..1]
-        print "#{majr_no}\n"
+        print "#{majr_option[i].text}\n"
         # binding.pry if majr_no == '10'
         r  = %x(curl -s 'http://netreg.isu.edu.tw/wapp/wapp_sha/wap_s140001.asp' --data 'lange_sel=zh_TW&qry_setyear=#{@year-1911}&qry_setterm=#{@term}&grade_beg=#{grade_beg}&grade_end=#{grade_end}&majr_no=#{majr_no}&divi_A=#{divi_A}&divi_M=#{divi_M}&divi_I=#{divi_I}&divi_D=#{divi_D}&divi_B=#{divi_B}&divi_G=#{divi_G}&divi_T=#{divi_T}&divi_F=#{divi_F}&cr_code=&cr_name=&yepg_sel=+&crdnum_beg=0&crdnum_end=6&apt_code=+&submit1=%B0e%A5X' --compressed)
         doc = Nokogiri::HTML(@ic.iconv(r))
@@ -75,49 +75,36 @@ class IShouUniversityCrawler
           next
         end
 
-        (2..doc.css('table')[1].css('tr').count - 1).each do |j|
-          (1..doc.css('table')[1].css('tr')[j].css('td').count - 1).each do |k|
+        doc.css('table')[1].css('tr')[2..-1].each do |row|
+          datas = row.css('td').map(&:text)
 
-            if doc.css('table')[1].css('tr')[j].css('td')[k].text == ""
-              next
-            end
-
-            data[k] = doc.css('table')[1].css('tr')[j].css('td')[k].content
-          end
-
-          if doc.css('table')[1].css('tr')[j].css('td a[target="_blank"]')[0] != nil
-            syllabus_url = "http://netreg.isu.edu.tw/wapp/wapp_sha/#{doc.css('table')[1].css('tr')[j].css('td a[target="_blank"]').map{|a| a[:href]}[0]}"
-          #   temp = Nokogiri::HTML(@ic.iconv(RestClient.get(syllabus_url))).css('table:nth-child(2) td')[-5]
-          #   lecturer = temp.text if temp != nil
-          #   temp = nil
-            # 跑lecturer會很久要經過3000個網頁阿！！！ 22 minutes...
-          end
-
-          code = "#{@year}-#{@term}-#{data[1].strip}"
+          code = "#{@year}-#{@term}-#{datas[1].strip}"
 
           course_days = []
           course_periods = []
           course_locations = []
-          data[9..15].each_with_index do |data, index|
-            data.match(/[#{PERIODS.keys.join}]+/).to_s.split('').each {|p|
+          datas[9..15].each_with_index do |dd, index|
+            dd.match(/[#{PERIODS.keys.join}]+/).to_s.split('').each {|p|
               course_days << index+1
               course_periods << PERIODS[p]
-              course_locations << data[8]
+              course_locations << datas[8].strip.gsub(/\u{a0}/, '')
             }
-          end
+          end # end each period
 
-          course = {
+          syllabus_url = row.css('td a[target="_blank"]')[0] && "http://netreg.isu.edu.tw/wapp/wapp_sha/#{row.css('td a[target="_blank"]').map{|a| a[:href]}[0]}"
+
+          @courses[code] = {
             year: @year,
             term: @term,
             department_code: majr_option[i].text[0..1],  # 系所代碼
-            department: data[3].strip,    # 開課系級
-            general_code: data[1].strip,    # 課程代號
+            department: datas[3].strip,    # 開課系級
+            general_code: datas[1].strip,    # 課程代號
             code: code,
-            name: data[2].strip,    # 課程名稱
-            credits: data[4].to_i,   # 學分數
-            required: data[5].include?('必'),    # 修別(必選修)
-            people_limit: data[6],    # 限制選修人數
-            people: data[7].to_i,    # 修課人數
+            name: datas[2].strip,    # 課程名稱
+            credits: datas[4].to_i,   # 學分數
+            required: datas[5].include?('必'),    # 修別(必選修)
+            people_limit: datas[6],    # 限制選修人數
+            people: datas[7].to_i,    # 修課人數
             url: syllabus_url,    # 課程大綱之類的連結
             # lecturer: lecturer,    # 授課教師
             day_1: course_days[0],
@@ -147,20 +134,55 @@ class IShouUniversityCrawler
             location_7: course_locations[6],
             location_8: course_locations[7],
             location_9: course_locations[8],
-            notes: data[16],    # 備註說明
+            notes: datas[16],    # 備註說明
           }
 
-          @after_each_proc.call(course: course) if @after_each_proc
 
-          @courses << course
-        end
+          # Parse Lecturer
+          unless syllabus_url.nil?
+
+            sleep(1) until (
+              lecturer_threads.delete_if { |t| !t.status };  # remove dead (ended) threads
+              lecturer_threads.count < (ENV['MAX_THREADS'] || 30)
+            )
+            lecturer_threads << Thread.new do
+              lecturer = nil
+
+              # 跑lecturer會很久要經過3000個網頁阿！！！ 22 minutes...
+              temp = Nokogiri::HTML(@ic.iconv(RestClient.get(syllabus_url))).css('table:nth-child(2) td')[-5]
+              lecturer = temp && temp.text
+
+              @courses[code][:lecturer] = lecturer
+              print "|"
+            end # end lecturer_threads
+
+          end # end parse lecturer
+
+        end # end each row
       end # end Thread
-    end
+    end # end each majr
+
     ThreadsWait.all_waits(*threads)
+    ThreadsWait.all_waits(*lecturer_threads)
 
-    @courses
-  end
-end
+    print "start updating....."
 
-# crawler = IShouUniversityCrawler.new(year: 2015, term: 1)
+    update_threads = []
+    @courses.values.each do |course|
+      sleep(1) until (
+        update_threads.delete_if { |t| !t.status };  # remove dead (ended) threads
+        update_threads.count < (ENV['MAX_THREADS'] || 30)
+      )
+      update_threads << Thread.new do
+        @after_each_proc.call(course: course) if @after_each_proc
+      end
+    end # end each @courses
+    ThreadsWait.all_waits(*update_threads)
+
+    @courses.values
+
+  end # end course method
+end # end IsuCourseCrawler
+
+# crawler = IsuCourseCrawler.new(year: 2015, term: 1)
 # File.write('courses.json', JSON.pretty_generate(crawler.courses()))

@@ -13,7 +13,7 @@ class CrawlWorker < WebTaskRunner::TaskWorker
 
     puts "Starting crawler for #{year}-#{term} ..."
 
-    crawler = IShouUniversityCrawler.new(
+    crawler = IsuCourseCrawler.new(
       year: year,
       term: term,
       update_progress: proc { |payload| WebTaskRunner.job_1_progress = payload[:progress] },
